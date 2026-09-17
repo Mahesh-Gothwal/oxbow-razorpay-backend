@@ -9,20 +9,15 @@ dotenv.config();
 const app = express();
 app.use(express.json());
 
-// ── CORS ──
-const allowedOrigins = [
-  process.env.FRONTEND_URL || "http://localhost:5173",
-].filter(Boolean);
-
+// ── CORS — hardcoded for reliability ──
 app.use(
   cors({
-    origin: (origin, callback) => {
-      if (!origin) return callback(null, true);
-      if (allowedOrigins.some((allowed) => origin!.startsWith(allowed!))) {
-        return callback(null, true);
-      }
-      callback(new Error("Not allowed by CORS"));
-    },
+    origin: [
+      "https://oxbowcreatives.com",
+      "https://www.oxbowcreatives.com",
+      "http://localhost:5173",
+      "http://localhost:3000",
+    ],
     credentials: true,
   })
 );
@@ -63,6 +58,7 @@ app.post("/api/create-order", async (req, res) => {
       receipt: `receipt_${Date.now()}`,
       notes: { product: "Oxbow Creatives Digital Product" },
     });
+    console.log(`✅ Order created: ${order.id}`);
     res.json({ id: order.id, amount: order.amount, currency: order.currency });
   } catch (error) {
     console.error("Order creation failed:", error);
@@ -98,10 +94,7 @@ app.post("/api/verify-payment", async (req, res) => {
   }
 });
 
-// ══════════════════════════════════════════════════════
-// DEDICATED EMAIL ENDPOINT — frontend calls this
-// separately after payment success, always works
-// ══════════════════════════════════════════════════════
+// ── Send Email ──
 app.post("/api/send-email", async (req, res) => {
   try {
     const { email, name, payment_id } = req.body;
@@ -121,7 +114,7 @@ app.post("/api/send-email", async (req, res) => {
   }
 });
 
-// ── Send Email via Resend ──
+// ── Resend Email Function ──
 async function sendDownloadEmail(email: string, name: string, paymentId: string) {
   const apiKey = process.env.RESEND_API_KEY;
   if (!apiKey) throw new Error("RESEND_API_KEY not set");
