@@ -3,7 +3,6 @@ import Razorpay from "razorpay";
 import crypto from "crypto";
 import cors from "cors";
 import dotenv from "dotenv";
-import nodemailer from "nodemailer";
 
 dotenv.config();
 
@@ -40,23 +39,12 @@ if (process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET) {
   console.warn("⚠️ Razorpay keys not set");
 }
 
-// ── Email transporter ──
-// Works with Gmail (App Password), GoDaddy email, Zoho, or any SMTP
-const transporter = nodemailer.createTransport({
-  host: process.env.SMTP_HOST || "smtp.gmail.com",
-  port: parseInt(process.env.SMTP_PORT || "587"),
-  secure: false,
-  auth: {
-    user: process.env.SMTP_USER,
-    pass: process.env.SMTP_PASS,
-  },
-});
-
-transporter.verify().then(() => {
-  console.log("✅ Email transporter ready");
-}).catch((err) => {
-  console.warn("⚠️ Email not ready:", err.message);
-});
+// ── Check Resend API key ──
+if (process.env.RESEND_API_KEY) {
+  console.log("✅ Resend email ready");
+} else {
+  console.warn("⚠️ RESEND_API_KEY not set — emails won't send");
+}
 
 // ── In-memory store ──
 const verifiedPayments = new Set<string>();
@@ -112,11 +100,11 @@ app.post("/api/verify-payment", async (req, res) => {
     verifiedPayments.add(razorpay_payment_id);
     console.log(`✅ Payment verified: ${razorpay_payment_id} | ${buyer_email}`);
 
-    // Send email (non-blocking — don't hold up the response)
+    // Send email (non-blocking)
     if (buyer_email) {
       sendDownloadEmail(buyer_email, buyer_name || "Customer", razorpay_payment_id)
         .then(() => console.log(`📧 Email sent to ${buyer_email}`))
-        .catch((err) => console.error(`📧 Email failed:`, err.message));
+        .catch((err) => console.error(`📧 Email failed:`, err));
     }
 
     res.json({ verified: true, payment_id: razorpay_payment_id });
@@ -126,11 +114,20 @@ app.post("/api/verify-payment", async (req, res) => {
   }
 });
 
-// ── Email Template ──
+// ═══════════════════════════════════════════════
+// SEND EMAIL VIA RESEND (HTTP API — no SMTP needed)
+// ═══════════════════════════════════════════════
 async function sendDownloadEmail(email: string, name: string, paymentId: string) {
-  const downloadUrl = process.env.DOWNLOAD_URL || "https://yourdomain.com/secure-downloads/sections.zip";
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey) {
+    console.warn("⚠️ RESEND_API_KEY not set, skipping email");
+    return;
+  }
+
+  const downloadUrl = process.env.DOWNLOAD_URL || "https://oxbowcreatives.com/secure-downloads/sections.zip";
   const brandName = "Oxbow Creatives";
   const productName = "Ultimate SaaS UI Kit";
+  const fromEmail = process.env.FROM_EMAIL || "onboarding@resend.dev";
 
   const htmlBody = `
 <!DOCTYPE html>
@@ -168,28 +165,38 @@ async function sendDownloadEmail(email: string, name: string, paymentId: string)
     </div>
 
     <div style="text-align:center;margin-top:24px;">
-      <p style="color:#9ca3af;font-size:12px;margin:0;">
-        Need help? Reply to this email or contact us at
-        <a href="mailto:${process.env.SMTP_USER}" style="color:#ffdf29;">${process.env.SMTP_USER}</a>
-      </p>
       <p style="color:#4b5563;font-size:11px;margin:12px 0 0;">
         © ${new Date().getFullYear()} ${brandName}. All rights reserved.
       </p>
     </div>
-
   </div>
 </body>
 </html>`;
 
-  await transporter.sendMail({
-    from: `"${brandName}" <${process.env.SMTP_USER}>`,
-    to: email,
-    subject: `Your download is ready — ${productName}`,
-    html: htmlBody,
+  const response = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      from: `${brandName} <${fromEmail}>`,
+      to: [email],
+      subject: `Your download is ready — ${productName}`,
+      html: htmlBody,
+    }),
   });
+
+  if (!response.ok) {
+    const errorData = await response.text();
+    throw new Error(`Resend API error ${response.status}: ${errorData}`);
+  }
+
+  const result = await response.json();
+  return result;
 }
 
-// ── Webhook (backup email sender) ──
+// ── Webhook (backup email) ──
 app.post("/api/razorpay-webhook", (req, res) => {
   const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
   if (!webhookSecret) return res.status(500).json({ error: "Webhook secret not configured" });
@@ -211,13 +218,12 @@ app.post("/api/razorpay-webhook", (req, res) => {
   if (event === "payment.captured") {
     console.log("💰 Webhook: payment captured:", payload.payment.entity.id);
     verifiedPayments.add(payload.payment.entity.id);
-    // Backup email via webhook (in case frontend verify call failed)
     if (payload.payment.entity.email) {
       sendDownloadEmail(
         payload.payment.entity.email,
         payload.payment.entity.notes?.buyer_name || "Customer",
         payload.payment.entity.id
-      ).catch((err) => console.error("Webhook email failed:", err.message));
+      ).catch((err) => console.error("Webhook email failed:", err));
     }
   }
 
