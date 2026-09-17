@@ -39,17 +39,15 @@ if (process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET) {
   console.warn("⚠️ Razorpay keys not set");
 }
 
-// ── Check Resend API key ──
 if (process.env.RESEND_API_KEY) {
   console.log("✅ Resend email ready");
 } else {
-  console.warn("⚠️ RESEND_API_KEY not set — emails won't send");
+  console.warn("⚠️ RESEND_API_KEY not set");
 }
 
-// ── In-memory store ──
 const verifiedPayments = new Set<string>();
 
-// ── Health check ──
+// ── Health ──
 app.get("/", (_req, res) => res.json({ status: "ok", service: "oxbow-razorpay" }));
 app.get("/api/health", (_req, res) => res.json({ status: "ok" }));
 
@@ -72,16 +70,10 @@ app.post("/api/create-order", async (req, res) => {
   }
 });
 
-// ── Verify Payment + Send Email ──
+// ── Verify Payment ──
 app.post("/api/verify-payment", async (req, res) => {
   try {
-    const {
-      razorpay_order_id,
-      razorpay_payment_id,
-      razorpay_signature,
-      buyer_email,
-      buyer_name,
-    } = req.body;
+    const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body;
 
     if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
       return res.status(400).json({ verified: false, error: "Missing fields" });
@@ -98,15 +90,7 @@ app.post("/api/verify-payment", async (req, res) => {
     }
 
     verifiedPayments.add(razorpay_payment_id);
-    console.log(`✅ Payment verified: ${razorpay_payment_id} | ${buyer_email}`);
-
-    // Send email (non-blocking)
-    if (buyer_email) {
-      sendDownloadEmail(buyer_email, buyer_name || "Customer", razorpay_payment_id)
-        .then(() => console.log(`📧 Email sent to ${buyer_email}`))
-        .catch((err) => console.error(`📧 Email failed:`, err));
-    }
-
+    console.log(`✅ Payment verified: ${razorpay_payment_id}`);
     res.json({ verified: true, payment_id: razorpay_payment_id });
   } catch (error) {
     console.error("Verification failed:", error);
@@ -114,15 +98,33 @@ app.post("/api/verify-payment", async (req, res) => {
   }
 });
 
-// ═══════════════════════════════════════════════
-// SEND EMAIL VIA RESEND (HTTP API — no SMTP needed)
-// ═══════════════════════════════════════════════
+// ══════════════════════════════════════════════════════
+// DEDICATED EMAIL ENDPOINT — frontend calls this
+// separately after payment success, always works
+// ══════════════════════════════════════════════════════
+app.post("/api/send-email", async (req, res) => {
+  try {
+    const { email, name, payment_id } = req.body;
+
+    if (!email) {
+      return res.status(400).json({ sent: false, error: "Email required" });
+    }
+
+    console.log(`📧 Sending email to ${email} for payment ${payment_id}`);
+    await sendDownloadEmail(email, name || "Customer", payment_id || "N/A");
+    console.log(`📧 Email sent successfully to ${email}`);
+
+    res.json({ sent: true });
+  } catch (error: any) {
+    console.error(`📧 Email failed:`, error?.message || error);
+    res.status(500).json({ sent: false, error: error?.message || "Email failed" });
+  }
+});
+
+// ── Send Email via Resend ──
 async function sendDownloadEmail(email: string, name: string, paymentId: string) {
   const apiKey = process.env.RESEND_API_KEY;
-  if (!apiKey) {
-    console.warn("⚠️ RESEND_API_KEY not set, skipping email");
-    return;
-  }
+  if (!apiKey) throw new Error("RESEND_API_KEY not set");
 
   const downloadUrl = process.env.DOWNLOAD_URL || "https://oxbowcreatives.com/secure-downloads/sections.zip";
   const brandName = "Oxbow Creatives";
@@ -135,26 +137,20 @@ async function sendDownloadEmail(email: string, name: string, paymentId: string)
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"></head>
 <body style="margin:0;padding:0;background:#0a0a0a;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
   <div style="max-width:560px;margin:0 auto;padding:40px 24px;">
-
     <div style="text-align:center;margin-bottom:32px;">
       <h1 style="color:#ffdf29;font-size:24px;margin:0;">${brandName}</h1>
     </div>
-
     <div style="background:#111111;border:1px solid #1e1e1e;border-radius:16px;padding:32px 24px;text-align:center;">
       <div style="width:56px;height:56px;border-radius:50%;background:rgba(34,197,94,0.15);margin:0 auto 20px;line-height:56px;font-size:28px;">✅</div>
       <h2 style="color:#ffffff;font-size:22px;margin:0 0 8px;">Payment Successful!</h2>
       <p style="color:#9ca3af;font-size:14px;margin:0 0 24px;">
         Hi ${name}, thank you for purchasing <strong style="color:#ffffff;">${productName}</strong>.
       </p>
-      <a href="${downloadUrl}"
-         style="display:inline-block;background:#ffdf29;color:#0a0a0a;font-weight:700;font-size:16px;padding:14px 32px;border-radius:12px;text-decoration:none;">
+      <a href="${downloadUrl}" style="display:inline-block;background:#ffdf29;color:#0a0a0a;font-weight:700;font-size:16px;padding:14px 32px;border-radius:12px;text-decoration:none;">
         ⬇ Download Your Files
       </a>
-      <p style="color:#9ca3af;font-size:12px;margin:16px 0 0;">
-        This link will always work. Save this email for future access.
-      </p>
+      <p style="color:#9ca3af;font-size:12px;margin:16px 0 0;">This link will always work. Save this email for future access.</p>
     </div>
-
     <div style="background:#111111;border:1px solid #1e1e1e;border-radius:12px;padding:20px 24px;margin-top:16px;">
       <h3 style="color:#ffffff;font-size:14px;margin:0 0 12px;">Order Details</h3>
       <table style="width:100%;font-size:13px;">
@@ -163,11 +159,8 @@ async function sendDownloadEmail(email: string, name: string, paymentId: string)
         <tr><td style="color:#9ca3af;padding:4px 0;">Access</td><td style="color:#22c55e;text-align:right;padding:4px 0;font-weight:600;">Lifetime</td></tr>
       </table>
     </div>
-
     <div style="text-align:center;margin-top:24px;">
-      <p style="color:#4b5563;font-size:11px;margin:12px 0 0;">
-        © ${new Date().getFullYear()} ${brandName}. All rights reserved.
-      </p>
+      <p style="color:#4b5563;font-size:11px;margin:12px 0 0;">© ${new Date().getFullYear()} ${brandName}. All rights reserved.</p>
     </div>
   </div>
 </body>
@@ -189,14 +182,13 @@ async function sendDownloadEmail(email: string, name: string, paymentId: string)
 
   if (!response.ok) {
     const errorData = await response.text();
-    throw new Error(`Resend API error ${response.status}: ${errorData}`);
+    throw new Error(`Resend API ${response.status}: ${errorData}`);
   }
 
-  const result = await response.json();
-  return result;
+  return await response.json();
 }
 
-// ── Webhook (backup email) ──
+// ── Webhook ──
 app.post("/api/razorpay-webhook", (req, res) => {
   const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
   if (!webhookSecret) return res.status(500).json({ error: "Webhook secret not configured" });
@@ -230,7 +222,6 @@ app.post("/api/razorpay-webhook", (req, res) => {
   res.json({ status: "ok" });
 });
 
-// ── Start ──
 const PORT = parseInt(process.env.PORT || "3001", 10);
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`🚀 Server running on port ${PORT}`);
