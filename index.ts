@@ -1,7 +1,6 @@
 import express from "express";
 import Razorpay from "razorpay";
 import crypto from "crypto";
-import cors from "cors";
 import dotenv from "dotenv";
 
 dotenv.config();
@@ -9,18 +8,40 @@ dotenv.config();
 const app = express();
 app.use(express.json());
 
-// ── CORS — hardcoded for reliability ──
-app.use(
-  cors({
-    origin: [
-      "https://oxbowcreatives.com",
-      "https://www.oxbowcreatives.com",
-      "http://localhost:5173",
-      "http://localhost:3000",
-    ],
-    credentials: true,
-  })
-);
+// ══════════════════════════════════════════════════════
+// BULLETPROOF CORS — manually set headers on EVERY response
+// This works even when the hosting platform intercepts OPTIONS
+// ══════════════════════════════════════════════════════
+const ALLOWED_ORIGINS = [
+  "https://oxbowcreatives.com",
+  "https://www.oxbowcreatives.com",
+  "http://localhost:5173",
+  "http://localhost:3000",
+];
+
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+
+  // Set CORS headers for allowed origins
+  if (origin && ALLOWED_ORIGINS.includes(origin)) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+  } else if (!origin) {
+    // Allow requests with no origin (webhooks, server-to-server, Postman)
+    res.setHeader("Access-Control-Allow-Origin", "*");
+  }
+
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  res.setHeader("Access-Control-Allow-Credentials", "true");
+
+  // Handle preflight OPTIONS request immediately
+  if (req.method === "OPTIONS") {
+    res.status(200).end();
+    return;
+  }
+
+  next();
+});
 
 // ── Razorpay ──
 let razorpay: Razorpay | null = null;
