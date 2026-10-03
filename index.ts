@@ -116,6 +116,36 @@ app.post("/api/verify-payment", async (req, res) => {
 });
 
 // ── Send Email ──
+// ── Check if a payment ID is valid (used by Thank You page) ──
+app.post("/api/check-payment", async (req, res) => {
+  const { payment_id } = req.body;
+
+  if (!payment_id) {
+    return res.json({ valid: false });
+  }
+
+  // Check in-memory store first
+  if (verifiedPayments.has(payment_id)) {
+    return res.json({ valid: true });
+  }
+
+  // If not in memory (server may have restarted), verify with Razorpay API
+  if (razorpay) {
+    try {
+      const payment = await razorpay.payments.fetch(payment_id);
+      if (payment && (payment.status === "captured" || payment.status === "authorized")) {
+        verifiedPayments.add(payment_id); // Cache it
+        return res.json({ valid: true });
+      }
+    } catch {
+      // Payment ID not found in Razorpay
+    }
+  }
+
+  res.json({ valid: false });
+});
+
+// ── Send Email ──
 app.post("/api/send-email", async (req, res) => {
   try {
     const { email, name, payment_id } = req.body;
