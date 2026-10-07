@@ -71,11 +71,11 @@ app.get("/api/health", (_req, res) => res.json({ status: "ok" }));
 app.post("/api/create-order", async (req, res) => {
   if (!razorpay) return res.status(500).json({ error: "Razorpay not configured" });
   try {
-    const { amount } = req.body;
+   const { amount, currency } = req.body
     if (!amount || amount <= 0) return res.status(400).json({ error: "Invalid amount" });
     const order = await razorpay.orders.create({
       amount,
-      currency: "INR",
+      currency: currency === "USD" ? "USD" : "INR",
       receipt: `receipt_${Date.now()}`,
       notes: { product: "Oxbow Creatives Digital Product" },
     });
